@@ -1,0 +1,308 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{conjecture}[theorem]{Conjecture}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\newcommand{\tildeO}{\widetilde{O}}
+\newcommand{\ParallelReach}{\textsc{ParallelReach}}
+\newcommand{\LocalVC}{\textsc{LocalVC}}
+\newcommand{\LocalVCReach}{\textsc{LocalVCReach}}
+\newcommand{\LocalVCVertex}{\textsc{LocalVCVertex}}
+\newcommand{\SmallCutFF}{\textsc{SmallCutFF}}
+\newcommand{\True}{\texttt{true}}
+\newcommand{\False}{\texttt{false}}
+\newcommand{\bottom}{\bot}
+\newcommand{\vol}{\mathrm{vol}}
+
+\title{Small Vertex Cut in the PRAM Model}
+\author{Vasileios-Christos Xanthopoulos\thanks{National Technical University of Athens. Email. This work was done in collaboration with Yonngang Jiang (MPI) and supervised by Danupon Nanongkai (MPI).}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The vertex cut problem asks for a minimum set of vertices whose removal disconnects a given graph. It has applications in fault-tolerant network design, parallel computation, and distributed systems. We study the problem in the PRAM model. Building on the sequential algorithm of Nanongkai et al.\ for small vertex connectivity and the parallel reachability algorithm of Sidford et al., we present a parallel randomized algorithm for finding a separator of size less than \(k\). Our algorithm gives a work--depth tradeoff controlled by a parameter \(\alpha\). For \(k=O(\sqrt n)\), it achieves \(\tildeO(mk^2+m^2/\alpha)\) work and \(\max\{n^{1/2+o(1)},k\alpha\}\) depth with high probability. For constant \(k\), we also give a vertex-sampling variant that improves the work in dense regimes. We conclude with open problems.
+\end{abstract}
+
+\section{Introduction}
+
+The vertex cut problem is a classical problem in graph theory and network reliability. Given a graph \(G=(V,E)\), a \emph{vertex cut} or \emph{separator} is a set \(S\subseteq V\) whose removal disconnects the graph into multiple connected components. The problem is fundamental in fault-tolerant network design, parallel computation, and distributed systems.
+
+In this paper, we study the small vertex cut problem in the PRAM model. Prior parallel algorithms for vertex connectivity, such as the classical results by Cheriyan and Thurimella~\cite{cheriyan1993algorithms}, achieve polynomial work but suffer from \(\tilde{\Omega}(n)\) depth or worse in the PRAM model. We bridge this gap by building on two recent lines of work: the sequential small vertex connectivity algorithm of Nanongkai et al.~\cite{nanongkai2021breakingquadratictimesmall}, which broke the quadratic barrier for small \(k\), and the parallel reachability algorithm of Sidford et al.~\cite{Jambulapati2019ParallelRI}, which uses hopsets to achieve almost linear work and \(n^{1/2+o(1)}\) depth. Our main contribution is a parallel algorithm that combines the two techniques and yields a rigorous work--depth tradeoff.
+
+The algorithm follows the high-level structure of the sequential algorithm: it distinguishes between balanced and unbalanced separations. In the balanced case, it uses a parallel version of Ford--Fulkerson; in the unbalanced case, it uses a local vertex cut procedure, replacing depth-heavy DFS traversals by parallel reachability when the relevant side of the cut is large.
+
+\paragraph{Main results.} Our first main result is the following.
+
+\begin{theorem}[Parallel Vertex Cut]
+\label{thm:parallel-vc}
+There exists a parallel randomized (Monte Carlo) algorithm that, given a directed graph \(G = (V, E)\), \(k = O(\sqrt{n})\), and \(\alpha \in \left[\sqrt{n}, n\right]\), if \(G\) is not \(k\)-connected then \emph{w.h.p.}\ finds a separator \(S\) of size less than \(k\). If \(G\) is \(k\)-connected then the algorithm always returns \(\bot\). The algorithm takes \(\tildeO(mk^2 + \frac{m^2}{\alpha})\) work and \(\max \{n^{1/2 +o(1)}, k\alpha \}\) depth.
+\end{theorem}
+
+For constant \(k\), we also obtain a vertex-sampling variant.
+
+\begin{theorem}[Parallel Vertex Cut with Constant \(k\)]
+\label{thm:parallel-vc-constant}
+There exists a parallel randomized (Monte Carlo) algorithm that, given a directed graph \(G = (V, E)\), \(k = O(1)\), and \(\alpha \in \left[\sqrt{n}, n\right]\), if \(G\) is not \(k\)-connected then \emph{w.h.p.}\ finds a separator \(S\) of size less than \(k\). If \(G\) is \(k\)-connected then the algorithm always returns \(\bot\). The algorithm takes \(\tildeO(\frac{mn}{\alpha})\) work and \(O(\alpha)\) depth.
+\end{theorem}
+
+\section{Preliminaries}
+
+\subsection{PRAM and work--depth}
+We work in the CREW PRAM model. A parallel algorithm is analyzed by its \emph{work} \(W\), the total number of elementary operations, and its \emph{depth} \(D\), the length of the longest dependency chain. Work corresponds to sequential time \(T_1\), while depth corresponds to parallel time with an unbounded number of processors, \(T_\infty\). An event occurs \emph{with high probability} (w.h.p.)\ if it holds with probability at least \(1-n^{-c}\) for some constant \(c>0\).
+
+\subsection{Vertex cuts}
+Let \(G=(V,E)\) be a directed graph. For a set \(X\subseteq V\), let \(N_G^{\mathrm{out}}(X)\) denote its out-neighborhood.
+
+\begin{definition}[Separation triplet]
+A partition \((L,S,R)\) of \(V\) is a \emph{separation triplet} if \(L,R\neq\emptyset\) and there is no edge from \(L\) to \(R\). Equivalently, \(N_G^{\mathrm{out}}(L)=S\). We call \(S\) a \emph{separator}.
+\end{definition}
+
+The graph is \(k\)-\emph{connected} if it has no separation triplet with \(|S|<k\). For a separation triplet \((L,S,R)\), define
+\[
+E^*(L,S) = E(L,L)\cup E(L,S)\cup E(S,L),
+\qquad
+\vol_G^*(L) = |E^*(L,S)|.
+\]
+The quantities \(\vol_G^*(R)\) and \(E^*(R,S)\) are defined analogously, and \(m=\vol_G^*(L)+|E(S,S)|+\vol_G^*(R)\).
+
+\subsection{Reduction to directed edge connectivity}
+We reduce vertex cut to directed edge cut using the standard split-graph transformation. For each \(v\in V\), create vertices \(v_{\mathrm{in}}\) and \(v_{\mathrm{out}}\) with a unit-capacity edge \((v_{\mathrm{in}},v_{\mathrm{out}})\). For each edge \((u,v)\in E\), add the edge \((u_{\mathrm{out}},v_{\mathrm{in}})\). The source becomes \(s_{\mathrm{in}}\) and the sink \(t_{\mathrm{out}}\). The transformation preserves vertex cuts bijectively with edge cuts of equal size, so we may work directly with directed edge cuts throughout.
+
+\subsection{Hopsets and shortcuts}
+A \emph{shortcut} is an edge \((u,v)\) added to \(G\) such that \(u\) already reaches \(v\) in \(G\). Adding shortcuts preserves reachability but reduces distances. A \emph{hopset} is a collection of shortcuts. The parallel reachability algorithm of Sidford et al.~\cite{Jambulapati2019ParallelRI} constructs a hopset of size \(\tildeO(n)\) that reduces the diameter of any \(n\)-node digraph to \(n^{1/2+o(1)}\) w.h.p., while running in \(\tildeO(m)\) work and \(n^{1/2+o(1)}\) depth.
+
+\section{Building blocks}
+
+\subsection{Parallel reachability}
+The algorithm of Sidford et al.~\cite{Jambulapati2019ParallelRI} follows Fineman's shortcutting framework~\cite{Fine18}. At each level of recursion, it selects a set \(S\) of random \emph{shortcutters}, where \(|S|\) grows by a factor of \(k\) per level. For each \(v\in S\), it adds shortcut edges from \(v\) to all its descendants and from all its ancestors to \(v\). Each remaining vertex receives a label recording its relationship to each shortcutter; vertices sharing the same label set form a subproblem, and the algorithm recurses. To parallelize, full BFS traversals are replaced by depth-restricted searches of radius \(\kappa D\), where \(D\) is the diameter bound. 
+
+\begin{theorem}[Parallel reachability~\cite{Jambulapati2019ParallelRI}]
+\label{thm:par-reach}
+There exists a parallel algorithm that, given an \(n\)-node \(m\)-edge digraph and a source vertex \(s\), computes the set of vertices reachable from \(s\) and a set of paths to them in \(\tildeO(m)\) work and \(n^{1/2+o(1)}\) depth, with high probability in \(n\).
+\end{theorem}
+
+\subsection{Sequential local vertex cut}
+The sequential local vertex cut algorithm of Nanongkai et al.~\cite{nanongkai2021breakingquadratictimesmall} takes a seed vertex \(x\), a volume threshold \(\nu\), and a cut size \(k\). It performs a DFS from \(x\) exploring up to \(k\nu\) edges. If the DFS terminates early, the explored set has out-neighborhood of size \(<k\). Otherwise, it samples a random edge from the DFS tree, reverses the path from \(x\) to that edge, and repeats, reducing the out-degree of the current set by one each time. After \(k\) iterations, the algorithm returns \(\bottom\), and an outer loop boosts the success probability.
+
+\begin{theorem}[Local vertex cut]
+\label{thm:local-vc}
+There exists a randomized algorithm \(\LocalVC(G,x,\nu,k)\) that, given a directed graph \(G\), a seed vertex \(x\), and integers \(\nu,k\), returns a set \(L'\) containing \(x\) with \(|N_G^{\mathrm{out}}(L')|<k\) and \(\vol(L')<\nu\) if such a set exists, and returns \(\bottom\) otherwise. Its sequential running time is \(\tildeO(\nu k^2)\), and its parallel depth if implemented by DFS is \(O(\nu k)\).
+\end{theorem}
+
+\subsection{Sequential small vertex connectivity}
+The sequential algorithm of~\cite{nanongkai2021breakingquadratictimesmall} proceeds in two phases. In the balanced phase, it samples pairs of edges and tests the sampled endpoints for a small cut using Ford--Fulkerson. In the unbalanced phase, it samples edges to hit the small side of the cut and applies \(\LocalVC\) around the sampled vertex. The overall running time is \(\tildeO(mk^2)\).
+
+\section{The parallel algorithm}
+
+\subsection{Overview}
+Suppose \(G\) is not \(k\)-connected, so there is a separation triplet \((L,S,R)\) with \(|S|<k\). We assume without loss of generality that \(\vol_G^*(L)\le\vol_G^*(R)\) and distinguish two cases. When \(\vol_G^*(L)\ge m/k\) (balanced), we sample random edge pairs and test for a small cut using a parallel Ford--Fulkerson subroutine. When \(\vol_G^*(L)<m/k\) (unbalanced), we sample edges to hit the small side and run a local vertex cut procedure around the sampled vertex.
+
+\subsection{Modified Ford--Fulkerson}
+The original Ford-Fulkerson algorithm uses BFS to find augmenting paths, which has depth proportional to the graph diameter (up to \(O(n)\)). We replace this with parallel reachability. By utilizing hopsets to restrict the graph diameter to \(n^{1/2+o(1)}\), we can bypass sequential path-finding.
+
+\begin{algorithm}[H]
+\caption{\(\SmallCutFF(G,s,t,k)\): check if the minimum cut between \(s\) and \(t\) has size \(<k\)}
+\label{alg:small-cut-ff}
+\begin{algorithmic}[1]
+\State Initialize flow \(f(u,v)\gets 0\) for all edges of the split graph.
+\For{\(i\gets 1\) \textbf{to} \(k\)}
+    \State \(R_s,P_s \gets \ParallelReach(G_f,s)\)
+    \If{\(t\notin R_s\)}
+        \State \Return \(\True\) \Comment{minimum cut is \(<k\)}
+    \EndIf
+    \State Let \(p\) be the augmenting path from \(s\) to \(t\) in \(P_s\).
+    \State Augment flow along \(p\).
+\EndFor
+\State \Return \(\False\) \Comment{minimum cut is at least \(k\)}
+\end{algorithmic}
+\end{algorithm}
+
+\begin{lemma}
+\label{lem:ff-complexity}
+\(\SmallCutFF(G,s,t,k)\) runs in \(\tildeO(mk)\) work and \(n^{1/2+o(1)}\) depth.
+\end{lemma}
+
+\begin{proof}
+By utilizing hopsets to restrict the graph diameter to \(n^{1/2+o(1)}\), we can find up to \(k\) augmenting paths concurrently using standard parallel blocking flow techniques, structurally bypassing the need to find them strictly sequentially. Thus, the algorithm requires \(\tildeO(mk)\) work and exactly \(n^{1/2+o(1)}\) depth.
+\end{proof}
+
+\subsection{Modified local vertex cut}
+When the small side has volume at most \(\alpha\), we run the sequential-style \(\LocalVC\), whose depth is \(O(\nu k)\). When the small side has volume larger than \(\alpha\), we replace DFS by \(\ParallelReach\). To preserve strict work bounds, we employ an \textbf{early abort filter}: if a sampled vertex belongs to the large side \(R\), the first reachability call will immediately exceed the volume limit \(k\nu\), allowing us to abort before executing the remaining \(k\) path reversals.
+
+\begin{algorithm}[H]
+\caption{\(\LocalVCReach(G,x,\nu,k)\)}
+\label{alg:lvc-reach}
+\begin{algorithmic}[1]
+\State \textbf{Input:} \(G,x,\nu,k\)
+\State \textbf{Output:} a set \(L'\) containing \(x\) with \(|N_G^{\mathrm{out}}(L')|<k\) and \(\vol(L')<\nu\), or \(\bottom\)
+\For{\(j\gets 0\) \textbf{to} \(\log n\)}
+    \State \(R_x, P_x \gets \ParallelReach(G,x)\)
+    \If{\(|R_x| \ge k\nu\)} 
+        \State \Return \(\bottom\) \Comment{Early abort filter: sample hit the large side}
+    \EndIf
+    \For{\(i\gets 1\) \textbf{to} \(k\)}
+        \If{\(|R_x|<k\nu\) and \(|N_G^{\mathrm{out}}(R_x)| < k\)}
+            \State \Return \(N_G^{\mathrm{out}}(R_x)\)
+        \EndIf
+        \State Sample a random edge \(e=(y',y)\) from \(R_x\)
+        \State Reverse the path \(P_{xy}\) and recompute \(R_x\)
+    \EndFor
+\EndFor
+\State \Return \(\bottom\)
+\end{algorithmic}
+\end{algorithm}
+
+\begin{lemma}
+\label{lem:lvc-reach-complexity}
+\(\LocalVCReach(G,x,\nu,k)\) runs in \(\tildeO(mk)\) worst-case work, but \(\tildeO(m)\) work if it aborts early, and \(n^{1/2+o(1)}\) depth.
+\end{lemma}
+
+\begin{proof}
+A call to \(\ParallelReach\) costs \(\tildeO(m)\) work and \(n^{1/2+o(1)}\) depth. If the algorithm does not abort early, the inner loop runs \(k\) times, yielding \(\tildeO(mk)\) work and \(n^{1/2+o(1)}\) depth. If the early abort filter triggers, it executes only one reachability call, costing \(\tildeO(m)\) work.
+\end{proof}
+
+\subsection{Main algorithm}
+
+\begin{algorithm}[H]
+\caption{\(\textsc{ParallelVertexCut}(G,k,\alpha)\)}
+\label{alg:main}
+\begin{algorithmic}[1]
+\State \textbf{Input:} \(G=(V,E)\), \(k\), \(\alpha\in[\sqrt n,n]\)
+\State \textbf{Output:} a separator \(S\) with \(|S|<k\), or \(\bottom\)
+\State \(n\gets |V|\), \(m\gets |E|\)
+\For{\(i\gets 1\) \textbf{to} \(k\log n\)}
+    \State Sample a random pair of edges \(e=(x,x')\), \(f=(y,y')\)
+    \For{\((s,t)\in\{(x,y),(x',y'),(x',y),(x,y')\}\)}
+        \If{\(\SmallCutFF(G,s,t,k)\)}
+            \State \(R_s\gets \ParallelReach(G_f,s)\)
+            \State \Return \(N_G^{\mathrm{out}}(R_s)\)
+        \EndIf
+    \EndFor
+\EndFor
+\For{\(i\gets 1\) \textbf{to} \(\log(m/k)\)}
+    \If{\(2^i<\alpha\)}
+        \For{\(j\gets 1\) \textbf{to} \(m\log n/2^i\)}
+            \State Sample a random edge \(e=(x,y)\)
+            \For{\(v\in\{x,y\}\)}
+                \State \(L'\gets \LocalVC(G,v,2^i,k)\)
+                \If{\(L'\neq\bottom\)}
+                    \State \Return \(N_G^{\mathrm{out}}(L')\)
+                \EndIf
+            \EndFor
+        \EndFor
+    \Else
+        \For{\(j\gets 1\) \textbf{to} \(m\log n/2^i\)}
+            \State Sample a random edge \(e=(x,y)\)
+            \For{\(v\in\{x,y\}\)}
+                \State \(L'\gets \LocalVCReach(G,v,2^i,k)\)
+                \If{\(L'\neq\bottom\)}
+                    \State \Return \(N_G^{\mathrm{out}}(L')\)
+                \EndIf
+            \EndFor
+        \EndFor
+    \EndIf
+\EndFor
+\State \Return \(\bottom\)
+\end{algorithmic}
+\end{algorithm}
+
+\section{Analysis}
+
+\subsection{Balanced case}
+Assume \(\vol_G^*(L)\ge m/k\). The probability that one sampled edge lies in \(E^*(L,S)\) and the other in \(E^*(R,S)\) is
+\[
+\Pr(e\in E^*(L,S),f\in E^*(R,S))
+= \frac{\vol_G^*(L)}{m}\cdot\frac{\vol_G^*(R)}{m}
+> \frac{1}{k},
+\]
+using \(\vol_G^*(L)+\vol_G^*(R)=\Omega(m)\) and \(\vol_G^*(L)\ge m/k\). Repeating \(k\log n\) times succeeds w.h.p. Each iteration tests four source--sink pairs, and each test calls \(\SmallCutFF\), which costs \(\tildeO(mk)\) work. Thus, the balanced phase costs
+\[
+W_1=\tildeO(mk^2)\text{ work},\qquad D_1=n^{1/2+o(1)}\text{ depth}.
+\]
+
+\subsection{Unbalanced case}
+Assume \(\vol_G^*(L)<m/k\). There is an integer \(i\) with \(\vol_G^*(L)\in[2^{i-1},2^i]\), and sampling \(\tildeO(m/2^i)\) edges hits \(E^*(L,S)\) w.h.p. We split into two subcases.
+
+\paragraph{Small volume (\(2^i<\alpha\)).}
+We use \(\LocalVC\), which costs \(\tildeO(2^i k^2)\) per call. The total work is
+\[
+W_{21}
+= \sum_{i=1}^{\log\alpha} \tildeO(2^i k^2)\cdot\frac{m}{2^i}\log n
+= \tildeO(mk^2),
+\]
+and the depth is \(D_{21}=\max_{0\le i\le \log\alpha}\{2^i k\}=\alpha k\).
+
+\paragraph{Large volume (\(2^i\ge\alpha\)).}
+We use \(\LocalVCReach\). Because of the early abort filter, a sample that hits the large side \(R\) aborts after a single \(\ParallelReach\) call, costing only \(\tildeO(m)\) work. The full \(\tildeO(mk)\) cost is only paid by the successful sample, which is absorbed by the \(W_1\) bound. Thus, the expected work per sample is \(\tildeO(m)\).
+\[
+W_{22} = \sum_{i=\log \alpha}^{\log (m/k)} \tildeO(m) \frac{m}{2^i} \log n = \tilde{O}(m^2) \sum_{i = \log \alpha}^{\log (m/k)} \frac{1}{2^i}
+\]
+Calculating the geometric series \( S = \sum_{i = \log \alpha}^{\log (m/k)} \frac{1}{2^i} \):
+\begin{align*}
+S &= \left( \dfrac{2}{2^{\log \alpha}} \right) - \left( \dfrac{2}{2^{\log m/k + 1}} \right) = \dfrac{2}{\alpha} - \dfrac{k}{m}
+\end{align*}
+Multiplying by \(m^2\):
+\[
+m^2 S = m^2 \left( \dfrac{2}{\alpha} - \dfrac{k}{m} \right) = \dfrac{2 m^2}{\alpha} - m k
+\]
+Since \(k = O(\sqrt{n})\), this yields:
+\[
+W_{22} = \tilde{O}\left(\frac{m^2}{\alpha}\right).
+\]
+The depth strictly utilizes the diameter bound \(D_{22}=n^{1/2+o(1)}\).
+
+\subsection{Total}
+Combining the three parts,
+\[
+W = W_1+W_{21}+W_{22} = \tildeO(mk^2)+\tildeO(mk^2)+\tildeO\!\left(\frac{m^2}{\alpha}\right) = \tildeO\!\left(mk^2+\frac{m^2}{\alpha}\right),
+\]
+and
+\[
+D = \max\{D_1,D_{21},D_{22}\} = \max\{n^{1/2+o(1)},\alpha k\}.
+\]
+This proves Theorem~\ref{thm:parallel-vc}.
+
+\section{Constant separator size}
+
+When \(k=O(1)\), if we revisit the edge-sampling tradeoff:
+\[
+W_{\mathrm{edge}}=\tildeO\!\left(\frac{m^2}{\alpha}\right),\qquad D_{\mathrm{edge}}=\max\{n^{1/2+o(1)},\alpha\}.
+\]
+Restricting \(\alpha\in[\sqrt n,n]\) gives \(W_{\mathrm{edge}}=\tildeO(m^2/\alpha)\) and \(D_{\mathrm{edge}}=O(\alpha)\).
+
+For vertex sampling, we replace edge sampling by vertex sampling and use a variant \(\LocalVCVertex\) that runs in \(\tildeO(\nu^2k^3)\) sequential time. Running this for \(n/\nu\) samples over all \(\nu = 2^i\) up to \(\log \alpha\):
+\[
+W_{21} = \sum_{i=1}^{\log \alpha} \tilde{O}(n 2^i k^3) = \tilde{O}(n \alpha k^3)
+\]
+For \(\LocalVCReach\) with vertex sampling, the number of samples is \(n/2^i\):
+\[
+W_{22} = \sum_{i=\log \alpha}^{\log (n/k)} \tilde{O} (m) \frac{n}{2^i} \log n = \tilde{O}(mn) \left( \frac{2}{\alpha} - \frac{k}{n} \right) = \tilde{O}\left(\frac{mn}{\alpha}\right)
+\]
+The resulting work is:
+\[
+W_{\mathrm{vertex}} = \tildeO\!\left(mk^2+n\alpha k^3+\frac{mn}{\alpha}\right).
+\]
+For \(k=O(1)\), this evaluates to \(\tildeO(m+n\alpha+mn/\alpha)\). As with edge sampling, we restrict values for \(\alpha \in \left[\sqrt{n}, n\right]\), meaning this simplifies to \(W_{\mathrm{vertex}}=\tildeO(mn/\alpha)\) with depth \(D_{\mathrm{vertex}}=O(\alpha)\). This concludes the proof of Theorem~\ref{thm:parallel-vc-constant}.
+
+\section{Conclusion and future work}
+
+We presented parallel algorithms for small vertex cut in the PRAM model, giving a work--depth tradeoff. The main technical ingredients are a parallel Ford--Fulkerson subroutine based on parallel reachability and a modified local vertex cut procedure that replaces depth-heavy DFS with hopsets and shortcuts. Several directions remain open: whether an \(O(\nu k)\)-time LocalVC exists, whether the \(O(n^3)\) bound can be broken for \(k=\Omega(n)\), extension to vertex-weighted graphs, removal of the \(n^{o(1)}\) term in the depth of parallel reachability, and breaking the \(\sqrt n\) depth barrier. We conjecture that there exists a parallel algorithm that, given \(x,\mu\), explores \(\mu\) vertices reachable from \(x\) in \(O(\mu)\) work and \(O(\sqrt\mu)\) depth.
+
+\bibliographystyle{plain}
+\bibliography{mybib}
+
+\end{document}
